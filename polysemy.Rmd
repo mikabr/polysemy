@@ -1,0 +1,112 @@
+---
+title: "Exploratory Polysemy Analysis"
+author: "Mika Braginsky"
+date: "February 10, 2015"
+output:
+  html_document:
+  highlight: tango
+theme: spacelab
+---
+  
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(cache=TRUE, message=FALSE, warning=FALSE)
+```
+
+***
+
+## Data Loading
+  
+  Load required libraries.
+```{r libraries, cache=FALSE}
+library(arm)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(RMySQL)
+library(stringr)
+```
+
+Load in Wordbank data.
+```{r database, cache=FALSE}
+# open database connection
+wordbank <- src_mysql(dbname="wordbank", host="54.149.39.46",
+                      user="wordbank", password="wordbank")
+
+# load tables
+wordmapping.table <- tbl(wordbank, "common_wordmapping")
+instruments.table <- tbl(wordbank, "common_instrumentsmap")
+english.ws.table <- tbl(wordbank, "instruments_english_ws")
+```
+
+Get item data.
+```{r item_data}
+# get item info
+mapping <- as.data.frame(wordmapping.table)
+
+# get instrument info
+instruments <- as.data.frame(instruments.table) %>%
+  rename(instrument_id = id)
+
+# join items and instruments together
+items <- left_join(mapping, instruments) %>%
+  mutate(language = factor(language, levels = c("Norwegian", "English", "Danish", "Spanish")))
+```
+
+```{r poly}
+instrument.items <- items %>% 
+  filter(language == "English", form == "WS", type == "word") %>%
+  select(item) %>%
+  mutate(stritem = str_replace(item, "\\.", "_"))
+
+instrument.data <- as.data.frame(english.ws.table) %>%
+  rename(id = basetable_ptr_id) %>% # Rename the id
+  gather(item, value, -id) %>% # Arrange in longform
+  mutate(stritem = str_replace(item, "item_", "")) %>%
+  select(-item) # Strip off item_ 
+
+data <- left_join(instrument.data, instrument.items)
+poly.data <- data %>%
+  filter(grepl("\\.",item)==TRUE) %>%
+  select(-stritem) %>%
+  separate(item, c("word", "category"), "\\.")
+poly.summary <- poly.data %>%
+  group_by(word, category) %>%
+  summarise(probability = sum(value == "produces", na.rm=TRUE) / length(value))
+
+poly.and <- poly.data %>%
+  group_by(id, word) %>%
+  summarise(prod.both = all(value == "produces"))
+poly.and.data <- left_join(poly.data, poly.and)
+poly.and.summary <- poly.and.data %>%
+  group_by(word, category) %>%
+  summarise(both.probability = sum(prod.both == TRUE, na.rm=TRUE) / length(prod.both))
+
+summary.data <- inner_join(poly.summary, poly.and.summary) %>%
+  group_by(word) %>%
+  mutate(cat = c("meaning1", "meaning2"))
+
+summary.prob <- summary.data %>%
+  select(-category) %>%
+  spread(cat, probability) %>%
+  mutate(cond1 = both.probability / meaning2,
+         cond2 = both.probability / meaning1) %>%
+  gather(category, conditional, cond1:cond2) %>%
+  gather(category.d, independent, meaning1:meaning2) %>%
+  arrange(word) %>%
+  filter(str_sub(category, -1, -1) == str_sub(category.d, -1, -1)) %>%
+  select(-category) %>%
+  rename(cat = category.d)
+
+summary.cat.prob <- left_join(summary.prob, select(summary.data, word, category, cat)) %>%
+  mutate(item = paste(word, category, sep=".")) %>%
+  select(item, word, independent, conditional) %>%
+  gather(measure, probability, independent:conditional)
+```
+
+```{r, fig.width=10, fig.height=6}
+ggplot(summary.cat.prob, aes(x=item, y=probability, colour=word, fill=measure)) +
+  geom_bar(position="dodge", stat="identity") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
