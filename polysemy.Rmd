@@ -1,7 +1,7 @@
 ---
 title: "Polysemy Analysis"
 author: "Mika Braginsky and Dan Yurovsky"
-date: "February 12, 2015"
+date: "February 16, 2015"
 output:
   html_document:
   highlight: tango
@@ -27,6 +27,7 @@ library(dplyr)
 library(tidyr)
 library(RMySQL)
 library(stringr)
+extract <- tidyr::extract
 ```
 
 Load in Wordbank data.
@@ -39,6 +40,7 @@ wordbank <- src_mysql(dbname="wordbank", host="54.149.39.46",
 wordmapping.table <- tbl(wordbank, "common_wordmapping")
 instruments.table <- tbl(wordbank, "common_instrumentsmap")
 english.ws.table <- tbl(wordbank, "instruments_english_ws")
+english.wg.table <- tbl(wordbank, "instruments_english_wg")
 ```
 
 Get item data.
@@ -55,31 +57,35 @@ items <- left_join(mapping, instruments) %>%
   mutate(language = factor(language, levels = c("Norwegian", "English", "Danish", "Spanish")))
 ```
 
-```{r poly_data}
-instrument.items <- items %>% 
+Get Words & Sentences data.
+```{r ws_data}
+ws.items <- items %>% 
   filter(language == "English", form == "WS", type == "word") %>%
   select(item) %>%
   mutate(stritem = str_replace(item, "\\.", "_"))
 
-instrument.data <- as.data.frame(english.ws.table) %>%
+ws.bykid <- as.data.frame(english.ws.table) %>%
   rename(id = basetable_ptr_id) %>% # Rename the id
   gather(item, value, -id) %>% # Arrange in longform
   mutate(stritem = str_replace(item, "item_", "")) %>%
   select(-item) # Strip off item_ 
 
-data <- left_join(instrument.data, instrument.items)
-poly.data <- data %>%
+ws.data <- left_join(ws.bykid, ws.items)
+ws.poly.data <- ws.data %>%
   filter(grepl("\\.",item)==TRUE) %>%
   select(-stritem)
+ws.poly.data[is.na(ws.poly.data$value),]$value = ""
 ```
 
-```{r conditionals}
-all.pairs <- expand.grid(item = unique(poly.data$item),pair = unique(poly.data$item))
+Compute conditional probabilities for WS items.
+```{r ws_conditionals}
+ws.all.pairs <- expand.grid(item = unique(ws.poly.data$item),
+                         pair = unique(ws.poly.data$item))
 
-item.data <- left_join(poly.data,all.pairs,by = c("item")) %>%
+ws.item.data <- left_join(ws.poly.data, ws.all.pairs, by = c("item")) %>%
   rename(item.value = value)
 
-pair.data <- item.data %>%
+ws.pair.data <- ws.item.data %>%
   mutate(pair.tmp = item,
          item = pair,
          pair = pair.tmp) %>%
@@ -87,23 +93,23 @@ pair.data <- item.data %>%
   rename(pair.value = item.value) %>%
   arrange(id,item)
 
-all.data <- inner_join(item.data, pair.data)
+ws.all.data <- inner_join(ws.item.data, ws.pair.data)
 
-and.data <- all.data %>%
+ws.and.data <- ws.all.data %>%
   rowwise() %>%
   mutate(both = item.value == "produces" & pair.value == "produces")
 
-summary.data <- and.data %>%
+ws.summary.data <- ws.and.data %>%
   group_by(item, pair) %>%
-  summarise(prop.both = sum(both,na.rm=TRUE) / length(both))
+  summarise(prop.both = sum(both) / length(both))
 
-match <- summary.data %>%
+ws.match <- ws.summary.data %>%
   filter(item == pair) %>%
   ungroup() %>%
   select(-item) %>%
   rename(prop.pair = prop.both)
 
-cond.data <- left_join(summary.data, match) %>%
+ws.cond.data <- left_join(ws.summary.data, ws.match) %>%
   mutate(conditional = prop.both / prop.pair) %>%
   filter(item != pair) %>%
   separate(item, c("item.word", "item.category"), "\\.") %>%
@@ -114,19 +120,20 @@ cond.data <- left_join(summary.data, match) %>%
                               "same word", "different word"))) %>%
   select(item, pair, same, conditional)
 
-means.data <- cond.data %>%
+ws.means.data <- ws.cond.data %>%
   group_by(item) %>%
   summarise(mean = mean(conditional),
             ci.low = ci.low(conditional),
             ci.high = ci.high(conditional))
 
-cond.mean.data <- left_join(cond.data, means.data, by="item") %>%
+ws.cond.mean.data <- left_join(ws.cond.data, ws.means.data, by="item") %>%
   mutate(item = factor(item))
 ```
 
-```{r plot, fig.width=10, fig.height=6}
-quartz(width=8, height=6)
-ggplot(cond.mean.data, aes(x=item, y=conditional, colour=same)) +
+Plots WS items.
+```{r ws_plot, fig.width=10, fig.height=6}
+#quartz(width=8, height=6)
+ggplot(ws.cond.mean.data, aes(x=item, y=conditional, colour=same)) +
   geom_point(aes(size=same)) +
   scale_size_discrete(range = c(1,3)) +
   geom_errorbar(aes(x=item, ymax=mean+ci.high, ymin=mean-ci.low, width=0.3)) +
@@ -135,6 +142,118 @@ ggplot(cond.mean.data, aes(x=item, y=conditional, colour=same)) +
   xlab("") + 
   ylab("Conditional Probabilities") +
   theme_bw() + 
-  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
+        legend.position = "none")
+```
+
+Get Words & Gestures data.
+```{r wg_data}
+wg.items <- items %>% 
+  filter(language == "English", form == "WG", type == "word") %>%
+  select(item) %>%
+  mutate(stritem = str_replace(item, "\\.", "_"))
+
+wg.bykid <- as.data.frame(english.wg.table) %>%
+  rename(id = basetable_ptr_id) %>% # Rename the id
+  gather(item, value, -id) %>% # Arrange in longform
+  mutate(stritem = str_replace(item, "item_", "")) %>%
+  select(-item) # Strip off item_ 
+
+wg.data <- left_join(wg.bykid, wg.items)
+wg.poly.data <- wg.data %>%
+  filter(grepl("\\.",item)==TRUE) %>%
+  select(-stritem)
+wg.poly.data[is.na(wg.poly.data$value),]$value = ""
+```
+
+Compute conditional probabilities for WG items.
+```{r wg_conditionals}
+wg.all.pairs <- expand.grid(item = unique(wg.poly.data$item),
+                         pair = unique(wg.poly.data$item))
+
+wg.item.data <- left_join(wg.poly.data, wg.all.pairs, by = c("item")) %>%
+  rename(item.value = value)
+
+wg.pair.data <- wg.item.data %>%
+  mutate(pair.tmp = item,
+         item = pair,
+         pair = pair.tmp) %>%
+  select(-pair.tmp) %>%
+  rename(pair.value = item.value) %>%
+  arrange(id,item)
+
+wg.all.data <- inner_join(wg.item.data, wg.pair.data)
+
+wg.and.data <- wg.all.data %>%
+  rowwise() %>%
+  mutate(both.produces = item.value == "produces" & pair.value == "produces",
+         both.understands = (item.value == "produces" | item.value == "understands") &
+           (pair.value == "produces" | pair.value == "understands"))
+
+wg.summary.data <- wg.and.data %>%
+  group_by(item, pair) %>%
+  summarise(prop.both.produces = sum(both.produces) / length(both.produces),
+            prop.both.understands = sum(both.understands) / length(both.understands))
+
+wg.match <- wg.summary.data %>%
+  filter(item == pair) %>%
+  ungroup() %>%
+  select(-item) %>%
+  rename(prop.pair.produces = prop.both.produces,
+         prop.pair.understands = prop.both.understands)
+
+wg.cond.data <- left_join(wg.summary.data, wg.match) %>%
+  mutate(conditional.produces = prop.both.produces / prop.pair.produces,
+         conditional.understands = prop.both.understands / prop.pair.understands) %>%
+  filter(item != pair) %>%
+  separate(item, c("item.word", "item.category"), "\\.") %>%
+  mutate(item = paste(item.word, " (", item.category, ")", sep="")) %>%
+  separate(pair, c("pair.word", "pair.category"), "\\.") %>%
+  mutate(pair = paste(pair.word, " (", pair.category, ")", sep="")) %>%
+  mutate(same = factor(ifelse(item.word == pair.word,
+                              "same word", "different word"))) %>%
+  select(item, pair, same, conditional.produces, conditional.understands)
+
+wg.means.data <- wg.cond.data %>%
+  group_by(item) %>%
+  summarise(mean.produces = mean(conditional.produces),
+            cilow.produces = ci.low(conditional.produces),
+            cihigh.produces = ci.high(conditional.produces),
+            mean.understands = mean(conditional.understands),
+            cilow.understands = ci.low(conditional.understands),
+            cihigh.understands = ci.high(conditional.understands))
+
+wg.cond.mean.data <- left_join(wg.cond.data, wg.means.data, by="item") %>%
+  mutate(item = factor(item)) %>%
+  gather(measure.quantity, value, conditional.produces, conditional.understands,
+         mean.produces, cilow.produces, cihigh.produces,
+         mean.understands, cilow.understands, cihigh.understands) %>%
+  extract(measure.quantity, c("quantity","measure"),
+          "([[:alnum:]]+)\\.([[:alnum:]]+)")
+
+wg.prod <- wg.cond.mean.data %>%
+  filter(measure == "produces") %>%
+  spread(quantity, value)
+wg.comp <- wg.cond.mean.data %>%
+  filter(measure == "understands") %>%
+  spread(quantity, value)
+wg.prod.comp <- rbind(wg.prod, wg.comp)
+```
+
+Plots WG items.
+```{r wg_plot_prod, fig.width=10, fig.height=8}
+#quartz(width=8, height=6)
+ggplot(wg.prod.comp, aes(x=item, y=conditional, colour=same)) +
+  facet_grid(measure ~ .) +
+  geom_point(aes(size=same)) +
+  scale_size_discrete(range = c(1,3)) +
+  geom_errorbar(aes(x=item, ymax=mean+cihigh,
+                    ymin=mean-cilow, width=0.3)) +
+  geom_vline(aes(xintercept = seq(2.5,length(levels(item))+0.5,2)),
+             linetype = "dashed", colour="gray") +
+  xlab("") + 
+  ylab("Conditional Probabilities") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
         legend.position = "none")
 ```
