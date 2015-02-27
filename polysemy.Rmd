@@ -1,49 +1,46 @@
 ---
 title: "Polysemy Analysis"
 author: "Mika Braginsky and Dan Yurovsky"
-date: "February 16, 2015"
+date: "February 27, 2015"
 output:
   html_document:
-  highlight: tango
-theme: spacelab
+    highlight: tango
+    theme: spacelab
 ---
   
 ```{r setup, include=FALSE}
 library(knitr)
-opts_chunk$set(cache=TRUE, message=FALSE, warning=FALSE)
+opts_chunk$set(cache=TRUE, message=FALSE, warning=FALSE, echo=FALSE)
 ```
 
-***
-
-## Data Loading
-  
-  Load required libraries.
 ```{r libraries, cache=FALSE}
 source("~/Documents/projects/Ranalysis/useful.R")
 library(arm)
 library(ggplot2)
-library(magrittr)
 library(dplyr)
 library(tidyr)
+library(magrittr)
 library(RMySQL)
 library(stringr)
 extract <- tidyr::extract
+rename <- dplyr::rename
+select <- dplyr::select
+filter <- dplyr::filter
+summarise <- dplyr::summarise
 ```
 
-Load in Wordbank data.
 ```{r database, cache=FALSE}
-# open database connection
-wordbank <- src_mysql(dbname="wordbank", host="54.149.39.46",
-                      user="wordbank", password="wordbank")
+wordbank <- src_mysql(dbname="wordbank")
 
-# load tables
+#wordbank <- src_mysql(dbname="wordbank", host="54.149.39.46",
+#                      user="wordbank", password="wordbank")
+
 wordmapping.table <- tbl(wordbank, "common_wordmapping")
 instruments.table <- tbl(wordbank, "common_instrumentsmap")
 english.ws.table <- tbl(wordbank, "instruments_english_ws")
 english.wg.table <- tbl(wordbank, "instruments_english_wg")
 ```
 
-Get item data.
 ```{r item_data}
 # get item info
 mapping <- as.data.frame(wordmapping.table)
@@ -57,27 +54,29 @@ items <- left_join(mapping, instruments) %>%
   mutate(language = factor(language, levels = c("Norwegian", "English", "Danish", "Spanish")))
 ```
 
-Get Words & Sentences data.
 ```{r ws_data}
 ws.items <- items %>% 
   filter(language == "English", form == "WS", type == "word") %>%
-  select(item) %>%
-  mutate(stritem = str_replace(item, "\\.", "_"))
+  select(item_id, item) %>%
+  mutate(item_id = as.numeric(substr(item_id, 6, nchar(item_id))))
+      
+ws.columns <- colnames(english.ws.table)
+ws.names <- ws.columns[2:length(ws.columns)]
 
 ws.bykid <- as.data.frame(english.ws.table) %>%
-  rename(id = basetable_ptr_id) %>% # Rename the id
-  gather(item, value, -id) %>% # Arrange in longform
-  mutate(stritem = str_replace(item, "item_", "")) %>%
-  select(-item) # Strip off item_ 
+  mutate(id = as.numeric(basetable_ptr_id)) %>%
+  select(-basetable_ptr_id) %>%
+  gather_("item_id", "value", ws.names, convert=TRUE) %>%
+  mutate(item_id = as.numeric(substr(item_id, 6, nchar(item_id))))
 
-ws.data <- left_join(ws.bykid, ws.items)
+ws.data <- left_join(ws.bykid, ws.items, by=c("item_id")) %>%
+  select(-item_id)
+
 ws.poly.data <- ws.data %>%
-  filter(grepl("\\.",item)==TRUE) %>%
-  select(-stritem)
+  filter(grepl("\\.",item)==TRUE)
 ws.poly.data[is.na(ws.poly.data$value),]$value = ""
 ```
 
-Compute conditional probabilities for WS items.
 ```{r ws_conditionals}
 ws.all.pairs <- expand.grid(item = unique(ws.poly.data$item),
                          pair = unique(ws.poly.data$item))
@@ -130,43 +129,29 @@ ws.cond.mean.data <- left_join(ws.cond.data, ws.means.data, by="item") %>%
   mutate(item = factor(item))
 ```
 
-Plots WS items.
-```{r ws_plot, fig.width=10, fig.height=6}
-#quartz(width=8, height=6)
-ggplot(ws.cond.mean.data, aes(x=item, y=conditional, colour=same)) +
-  geom_point(aes(size=same)) +
-  scale_size_discrete(range = c(1,3)) +
-  geom_errorbar(aes(x=item, ymax=mean+ci.high, ymin=mean-ci.low, width=0.3)) +
-  geom_vline(aes(xintercept = seq(2.5,length(levels(item))+0.5,2)),
-             linetype = "dashed", colour="gray") +
-  xlab("") + 
-  ylab("Conditional Probabilities") +
-  theme_bw() + 
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
-        legend.position = "none")
-```
-
-Get Words & Gestures data.
 ```{r wg_data}
 wg.items <- items %>% 
   filter(language == "English", form == "WG", type == "word") %>%
-  select(item) %>%
-  mutate(stritem = str_replace(item, "\\.", "_"))
+  select(item_id, item) %>%
+  mutate(item_id = as.numeric(substr(item_id, 6, nchar(item_id))))
+      
+wg.columns <- colnames(english.wg.table)
+wg.names <- wg.columns[2:length(wg.columns)]
 
 wg.bykid <- as.data.frame(english.wg.table) %>%
-  rename(id = basetable_ptr_id) %>% # Rename the id
-  gather(item, value, -id) %>% # Arrange in longform
-  mutate(stritem = str_replace(item, "item_", "")) %>%
-  select(-item) # Strip off item_ 
+  mutate(id = as.numeric(basetable_ptr_id)) %>%
+  select(-basetable_ptr_id) %>%
+  gather_("item_id", "value", wg.names, convert=TRUE) %>%
+  mutate(item_id = as.numeric(substr(item_id, 6, nchar(item_id))))
 
-wg.data <- left_join(wg.bykid, wg.items)
+wg.data <- left_join(wg.bykid, wg.items, by=c("item_id")) %>%
+  select(-item_id)
+
 wg.poly.data <- wg.data %>%
-  filter(grepl("\\.",item)==TRUE) %>%
-  select(-stritem)
+  filter(grepl("\\.",item)==TRUE)
 wg.poly.data[is.na(wg.poly.data$value),]$value = ""
 ```
 
-Compute conditional probabilities for WG items.
 ```{r wg_conditionals}
 wg.all.pairs <- expand.grid(item = unique(wg.poly.data$item),
                          pair = unique(wg.poly.data$item))
@@ -240,7 +225,29 @@ wg.comp <- wg.cond.mean.data %>%
 wg.prod.comp <- rbind(wg.prod, wg.comp)
 ```
 
-Plots WG items.
+This analysis uses data from [Wordbank](http://wordbank.stanford.edu/), an open database that aggregates administrations of the CDI across labs and languages. We take the `r nrow(ws.poly.data) / length(unique(ws.poly.data$item))` administrations of English Words & Sentences and the `r nrow(wg.poly.data) / length(unique(wg.poly.data$item))` administrations of English Words & Gestures, and examine the set of words that appear twice on the form in different semantic categories. These words vary in whether their meanings are polysemous (e.g. "chicken" in Animals and "chicken" in Food and Drink) or homonymous (e.g. "can" in Small Household Objects and "can" in Helping Verbs). There are `r length(unique(ws.poly.data$item))` such words on English WS and `r length(unique(wg.poly.data$item))` such words on English WG.
+
+For each of these words, we compute the proportion of children that are reported to produce it. Then for each pair of these words (both matched in form and not matched in form), we compute the proportion of children that are reported to produce both of them. We then compute the conditional probability of producing word A on word B as the proportion producing both A and B divided by the proportion producing word B.
+
+The plot below shows the Words & Sentences data, with each point being the conditional probability of producing the x-axis word on producing one of the other words. The large teal point is that probability for the form-matched pair, while the small red points are those probabilities for all the other, non-form matched words. The interval shows a bootstrapped 95% confidence interval on the mean of all the conditional probabilities.
+
+```{r ws_plot, fig.width=10, fig.height=6}
+#quartz(width=8, height=6)
+ggplot(ws.cond.mean.data, aes(x=item, y=conditional, colour=same)) +
+  geom_point(aes(size=same)) +
+  scale_size_discrete(range = c(1,3)) +
+  geom_errorbar(aes(x=item, ymax=mean+ci.high, ymin=mean-ci.low, width=0.3)) +
+  geom_vline(aes(xintercept = seq(2.5,length(levels(item))+0.5,2)),
+             linetype = "dashed", colour="gray") +
+  xlab("") + 
+  ylab("Conditional Probabilities") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),
+        legend.position = "none")
+```
+
+The plot below shows the same analysis on Words and Gestures data, with proportions computed over both measures on the form ("understands" and "produces").
+
 ```{r wg_plot_prod, fig.width=10, fig.height=8}
 #quartz(width=8, height=6)
 ggplot(wg.prod.comp, aes(x=item, y=conditional, colour=same)) +
