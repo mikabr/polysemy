@@ -1,0 +1,4 @@
+.idea/
+*.RData
+*_cache/
+*_files/
